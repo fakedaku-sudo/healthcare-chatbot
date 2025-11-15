@@ -3,105 +3,151 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>HealthCare ChatBot</title>
+    <title>MediChat - AI Health Assistant</title>
     <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
 </head>
 <body>
-    <div class="container">
-        <div class="header">
-            <h1>🏥 HealthCare ChatBot</h1>
-            <p>Describe your symptoms and get instant health recommendations</p>
-        </div>
-
-        <div class="chat-container">
-            <div class="chat-box" id="chatBox">
-                <div class="message bot-message">
-                    <p>Hello! I'm your HealthCare ChatBot. Please describe your symptoms to get a diagnosis and recommendations.</p>
-                </div>
-            </div>
-
-            <div class="input-section">
-                <div class="form-group">
-                    <label for="symptomInput">Enter your symptom:</label>
-                    <div class="input-wrapper">
-                        <input 
-                            type="text" 
-                            id="symptomInput" 
-                            placeholder="e.g., fever, headache, cough..."
-                            autocomplete="off"
-                        >
-                        <ul id="suggestions" class="suggestions-list"></ul>
+    <div class="modern-container">
+        <!-- Main Chat Interface -->
+        <div class="chat-main">
+            <!-- Header with branding -->
+            <div class="modern-header">
+                <div class="header-left">
+                    <img src="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Crect fill='%235fa5a8' width='100' height='100' rx='20'/%3E%3Crect fill='white' x='20' y='25' width='60' height='50' rx='8'/%3E%3Ccircle cx='40' cy='45' r='3' fill='%235fa5a8'/%3E%3Ccircle cx='60' cy='45' r='3' fill='%235fa5a8'/%3E%3Cpath d='M 45 55 Q 50 60 55 55' stroke='%235fa5a8' stroke-width='2' fill='none'/%3E%3Cpath d='M 65 30 L 75 25 L 75 35 M 70 30 L 80 30' stroke='white' stroke-width='2' fill='none'/%3E%3Cpath d='M 65 40 Q 70 45 65 50 Q 60 45 65 40' stroke='white' stroke-width='2' fill='white'/%3E%3C/svg%3E" alt="MediChat Logo" class="header-logo">
+                    <div class="header-text">
+                        <h1>MediChat</h1>
+                        <p>Your AI Health Assistant</p>
                     </div>
                 </div>
-                
-                <div class="form-group">
-                    <label for="knownDiseaseInput">Or enter a known disease (optional):</label>
+                <div class="header-right">
+                    <button id="voiceAssistantToggle" class="voice-toggle-modern" title="Toggle voice">
+                        🔊
+                    </button>
+                    <button id="themeToggle" class="theme-toggle" title="Toggle theme">
+                        🌙
+                    </button>
+                </div>
+            </div>
+
+            <!-- User Profile Section -->
+            <div class="user-profile-section">
+                <div id="profileForm" class="profile-form">
+                    <input type="text" id="userName" class="profile-input" placeholder="Your Name" maxlength="50">
+                    <input type="number" id="userAge" class="profile-input" placeholder="Your Age" min="1" max="120">
+                    <button id="saveProfileBtn" class="save-profile-btn">Save Profile</button>
+                </div>
+                <div id="profileDisplay" class="profile-display" style="display: none;">
+                    <span id="displayName"></span> | <span id="displayAge"></span>
+                    <button id="editProfileBtn" class="edit-profile-btn" onclick="toggleProfileEdit()">Edit</button>
+                </div>
+            </div>
+
+            <!-- Chat Messages Area -->
+            <div class="chat-messages-area">
+                <div id="chatBox" class="messages-container">
+                    <div class="welcome-message">
+                        <div class="welcome-icon">🏥</div>
+                        <h2>Welcome to MediChat</h2>
+                        <p>Ask me about symptoms, diseases, health tips, and more!</p>
+                        <div class="quick-options">
+                            <button class="quick-btn" onclick="setInput('I have fever')">Fever</button>
+                            <button class="quick-btn" onclick="setInput('How to manage stress')">Stress</button>
+                            <button class="quick-btn" onclick="setInput('Sleep tips')">Sleep</button>
+                            <button class="quick-btn" onclick="setInput('Diet advice')">Diet</button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Voice Feedback -->
+            <div id="voiceFeedback" class="voice-feedback-modern" style="display: none;">
+                <div class="listening-wave">
+                    <span></span><span></span><span></span><span></span><span></span>
+                </div>
+                <div id="recognizedText" class="recognized-text">🎤 Listening...</div>
+            </div>
+
+            <!-- Input Area -->
+            <div class="input-area-modern">
+                <div class="input-wrapper-modern">
                     <input 
                         type="text" 
-                        id="knownDiseaseInput" 
-                        placeholder="e.g., dengue, influenza..."
+                        id="symptomInput" 
+                        class="modern-input"
+                        placeholder="Ask about symptoms, diseases, health tips... or click 🎤 to speak"
+                        autocomplete="off"
                     >
+                    <button id="voiceInputBtn" class="voice-btn-modern" title="Click to speak">
+                        🎤
+                    </button>
+                    <button id="sendBtn" class="send-btn-modern" title="Send message">
+                        ➤
+                    </button>
                 </div>
+                <div class="input-hint">💡 You can ask about symptoms, diseases, or general health advice</div>
+            </div>
 
-                <div class="form-group">
-                    <label for="ageInput">Age:</label>
-                    <input 
-                        type="number" 
-                        id="ageInput" 
-                        min="0" 
-                        max="120" 
-                        value="30"
-                    >
-                </div>
-
-                <div class="form-group">
-                    <label for="daysInput">How many days have you had this symptom?</label>
-                    <input 
-                        type="number" 
-                        id="daysInput" 
-                        min="1" 
-                        max="365" 
-                        value="1"
-                    >
-                </div>
-
-                <button id="submitBtn" class="submit-btn">Get Diagnosis</button>
-                <div id="followupContainer" style="display:none; margin-top:12px;">
-                    <div id="followupQuestions"></div>
-                    <button id="followupSubmit" class="submit-btn" style="margin-top:10px;">Submit Answers</button>
-                </div>
+            <!-- Options Bar -->
+            <div class="options-bar">
+                <button id="diagnosisTab" class="tab-btn active">Diagnosis</button>
+                <button id="healthTipsTab" class="tab-btn">Health Tips</button>
+                <button id="historyBtn" class="tab-btn">History</button>
+                <button id="clearHistoryBtn" class="tab-btn clear">Clear</button>
             </div>
         </div>
 
-        <div class="results-container" id="resultsContainer" style="display: none;">
-            <div class="result-card">
-                <h2>Diagnosis Results</h2>
-                
-                <div class="result-section">
-                    <h3>Possible Disease:</h3>
-                    <p id="diseaseResult" class="disease-name"></p>
+        <!-- Sidebar - Results Panel -->
+        <aside class="results-sidebar">
+            <div class="results-panel" id="resultsPanel">
+                <div class="empty-state">
+                    <div class="empty-icon">📋</div>
+                    <p>Results will appear here</p>
                 </div>
-
-                <div class="result-section">
-                    <h3>Description:</h3>
-                    <p id="descriptionResult"></p>
-                </div>
-
-                <div class="result-section">
-                    <h3>Condition Assessment:</h3>
-                    <p id="conditionResult"></p>
-                </div>
-
-                <div class="result-section">
-                    <h3>Recommended Precautions:</h3>
-                    <ul id="precautionsList"></ul>
-                </div>
-
-                <button id="resetBtn" class="reset-btn">Ask Another Question</button>
             </div>
-        </div>
+        </aside>
     </div>
 
     <script src="{{ url_for('static', filename='script.js') }}"></script>
+    <script>
+        // Profile management
+        function toggleProfileEdit() {
+            document.getElementById('profileForm').style.display = 'flex';
+            document.getElementById('profileDisplay').style.display = 'none';
+        }
+
+        document.getElementById('saveProfileBtn').addEventListener('click', function() {
+            const name = document.getElementById('userName').value.trim();
+            const age = document.getElementById('userAge').value.trim();
+            
+            if (name && age) {
+                localStorage.setItem('userName', name);
+                localStorage.setItem('userAge', age);
+                
+                document.getElementById('displayName').textContent = `👤 ${name}`;
+                document.getElementById('displayAge').textContent = `📅 Age ${age}`;
+                
+                document.getElementById('profileForm').style.display = 'none';
+                document.getElementById('profileDisplay').style.display = 'flex';
+            } else {
+                alert('Please enter both name and age');
+            }
+        });
+
+        // Load profile on page load
+        window.addEventListener('load', function() {
+            const name = localStorage.getItem('userName');
+            const age = localStorage.getItem('userAge');
+            
+            if (name && age) {
+                document.getElementById('displayName').textContent = `👤 ${name}`;
+                document.getElementById('displayAge').textContent = `📅 Age ${age}`;
+                document.getElementById('profileForm').style.display = 'none';
+                document.getElementById('profileDisplay').style.display = 'flex';
+            } else {
+                document.getElementById('profileForm').style.display = 'flex';
+                document.getElementById('profileDisplay').style.display = 'none';
+            }
+        });
+    </script>
 </body>
 </html>

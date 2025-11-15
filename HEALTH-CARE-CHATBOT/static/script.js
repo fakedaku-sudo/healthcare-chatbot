@@ -1,226 +1,575 @@
+/* ========================================
+   MEDICHAT - MODERN SCRIPT WITH Q&A
+   ======================================== */
+
+// ========== GLOBAL VARIABLES ==========
+
+let recognition;
+let isListening = false;
+let voiceEnabled = localStorage.getItem('voiceEnabled') === 'true';
+let chatHistory = [];
+let currentDiagnosis = null;
+let desiredListening = false; // when true, keep restarting recognition for continuous listening
+
+const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+const synth = window.speechSynthesis;
+
+// ========== MEDICAL TERMS DATABASE ==========
+
+const MEDICAL_TERMS = [
+    'fever', 'cough', 'headache', 'body ache', 'fatigue', 'cold', 'nausea', 'diarrhea',
+    'congestion', 'sore throat', 'rash', 'swelling', 'itching', 'chills', 'dengue',
+    'malaria', 'diabetes', 'hypertension', 'cholera', 'pneumonia', 'tuberculosis',
+    'typhoid', 'asthma', 'bronchitis', 'pneumonitis', 'cardiac', 'heart', 'stroke',
+    'anxiety', 'depression', 'vertigo', 'acne', 'ulcers', 'hemorrhoids', 'arthritis',
+    'psoriasis', 'impetigo', 'fungal', 'allergy', 'jaundice', 'precaution', 'symptom',
+    'disease', 'medication', 'treatment', 'doctor', 'hospital', 'pharmacy'
+];
+
+// ========== INITIALIZATION ==========
+
 document.addEventListener('DOMContentLoaded', function() {
-    const symptomInput = document.getElementById('symptomInput');
-    const knownDiseaseInput = document.getElementById('knownDiseaseInput');
-    const daysInput = document.getElementById('daysInput');
-    const ageInput = document.getElementById('ageInput');
-    const submitBtn = document.getElementById('submitBtn');
-    const resetBtn = document.getElementById('resetBtn');
-    const followupContainer = document.getElementById('followupContainer');
-    const followupQuestions = document.getElementById('followupQuestions');
-    const followupSubmit = document.getElementById('followupSubmit');
-    const suggestionsList = document.getElementById('suggestions');
-    const chatBox = document.getElementById('chatBox');
-    const resultsContainer = document.getElementById('resultsContainer');
-    const inputSection = document.querySelector('.input-section');
+    initializeVoiceRecognition();
+    loadChatHistory();
+    setupEventListeners();
+    updateVoiceToggleUI();
+});
 
-    // Handle symptom input with suggestions
-    symptomInput.addEventListener('input', async function(e) {
-        const value = e.target.value.trim();
-        
-        if (value.length < 2) {
-            suggestionsList.classList.remove('active');
-            return;
-        }
-
-        try {
-            const response = await fetch('/api/suggest_symptoms', {
-                method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json',
-                },
-                body: JSON.stringify({ text: value })
-            });
-
-            const data = await response.json();
-            displaySuggestions(data.suggestions);
-        } catch (error) {
-            console.error('Error fetching suggestions:', error);
-        }
-    });
-
-    // Display suggestions
-    function displaySuggestions(suggestions) {
-        suggestionsList.innerHTML = '';
-        
-        if (suggestions.length === 0) {
-            suggestionsList.classList.remove('active');
-            return;
-        }
-
-        suggestions.forEach(suggestion => {
-            const li = document.createElement('li');
-            li.textContent = suggestion.replace(/_/g, ' ');
-            li.addEventListener('click', function() {
-                symptomInput.value = suggestion.replace(/_/g, ' ');
-                suggestionsList.classList.remove('active');
-            });
-            suggestionsList.appendChild(li);
-        });
-
-        suggestionsList.classList.add('active');
+function initializeVoiceRecognition() {
+    if (!SpeechRecognition) {
+        console.warn('Speech Recognition not supported');
+        document.getElementById('voiceInputBtn').style.display = 'none';
+        return;
     }
 
-    // Close suggestions when clicking outside
-    document.addEventListener('click', function(e) {
-        if (e.target !== symptomInput) {
-            suggestionsList.classList.remove('active');
-        }
-    });
+    recognition = new SpeechRecognition();
+    recognition.continuous = true;
+    recognition.interimResults = true;
+    recognition.language = 'en-US';
 
-    // Submit diagnosis
-    submitBtn.addEventListener('click', async function() {
-        const symptom = symptomInput.value.trim();
-        const days = parseInt(daysInput.value);
+    recognition.onstart = () => {
+        isListening = true;
+        document.getElementById('voiceInputBtn').classList.add('active');
+        showVoiceFeedback();
+    };
 
-        // Accept either symptom or known disease
-        const knownDisease = knownDiseaseInput.value.trim();
-        if (!symptom && !knownDisease) {
-            showError('Please enter a symptom');
-            return;
-        }
+    recognition.onresult = (event) => {
+        let interimTranscript = '';
+        let finalTranscript = '';
 
-        submitBtn.disabled = true;
-        submitBtn.innerHTML = '<span class="loading"></span> Diagnosing...';
-
-        try {
-            const response = await fetch('/api/diagnose', {
-                method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json',
-                },
-                body: JSON.stringify({ 
-                        symptom: symptom,
-                        days: days,
-                        age: parseInt(ageInput.value) || null,
-                        known_disease: knownDisease
-                    })
-            });
-
-            if (!response.ok) {
-                const error = await response.json();
-                throw new Error(error.error || 'Invalid symptom');
-            }
-
-            const data = await response.json();
-                    // If API returns follow-up questions, show them
-                    if (data.followup && data.followup.length > 0) {
-                        showFollowupQuestions(data.followup, data.disease);
+        for (let i = event.resultIndex; i < event.results.length; i++) {
+            // Use the first alternative transcript if available
+            const transcript = (event.results[i] && event.results[i][0] && event.results[i][0].transcript) || (event.results[i] && event.results[i].transcript) || '';
+            if (event.results[i].isFinal) {
+                finalTranscript += transcript;
             } else {
-                displayResults(data, symptom || knownDisease, days);
-                // Add messages to chat
-                addMessage('user', `I have ${symptom || knownDisease} for ${days} day(s), age ${ageInput.value}`);
-                addMessage('bot', `I've analyzed your symptoms. You may have ${data.disease}.`);
+                interimTranscript += transcript;
             }
+        }
 
-        } catch (error) {
-            showError(error.message || 'Error getting diagnosis');
-        } finally {
-            submitBtn.disabled = false;
-            submitBtn.textContent = 'Get Diagnosis';
+        const recognized = document.getElementById('recognizedText');
+        if (interimTranscript) {
+            recognized.textContent = '📝 ' + interimTranscript;
+        } else if (finalTranscript) {
+            recognized.textContent = '✅ ' + finalTranscript;
+        }
+
+        if (finalTranscript) {
+            // Place the recognized text into the input and auto-send as a command
+            const inputEl = document.getElementById('symptomInput');
+            if (inputEl) {
+                inputEl.value = finalTranscript;
+                // small delay to allow UI update before sending
+                setTimeout(() => {
+                    try {
+                        sendMessage();
+                    } catch (e) {
+                        console.warn('Auto-send failed:', e);
+                    }
+                }, 350);
+            }
+        }
+    };
+
+    recognition.onerror = (event) => {
+        console.error('Speech recognition error:', event.error);
+        document.getElementById('recognizedText').textContent = '❌ Error: ' + event.error;
+    };
+
+    recognition.onend = () => {
+        isListening = false;
+        document.getElementById('voiceInputBtn').classList.remove('active');
+        hideVoiceFeedback();
+        // If the user enabled continuous listening, restart recognition
+        if (desiredListening) {
+            setTimeout(() => {
+                try {
+                    recognition.start();
+                } catch (e) {
+                    console.warn('Restart recognition failed:', e);
+                }
+            }, 250);
+        }
+    };
+}
+
+function setupEventListeners() {
+    const input = document.getElementById('symptomInput');
+    const sendBtn = document.getElementById('sendBtn');
+    const voiceBtn = document.getElementById('voiceInputBtn');
+    const voiceToggle = document.getElementById('voiceAssistantToggle');
+    const clearBtn = document.getElementById('clearHistoryBtn');
+    const diagnosisTab = document.getElementById('diagnosisTab');
+    const healthTipsTab = document.getElementById('healthTipsTab');
+    const historyBtn = document.getElementById('historyBtn');
+
+    // Send message on Enter key
+    input.addEventListener('keypress', (e) => {
+        if (e.key === 'Enter' && input.value.trim()) {
+            sendMessage();
         }
     });
 
-    // Display results
-    function displayResults(data, symptom, days) {
-        document.getElementById('diseaseResult').textContent = data.disease;
-        document.getElementById('descriptionResult').textContent = data.description;
-        document.getElementById('conditionResult').textContent = data.condition;
+    sendBtn.addEventListener('click', sendMessage);
+    voiceBtn.addEventListener('click', toggleVoiceInput);
+    voiceToggle.addEventListener('click', toggleVoiceAssistant);
+    clearBtn.addEventListener('click', clearHistory);
+    diagnosisTab.addEventListener('click', () => setActiveTab('diagnosis'));
+    healthTipsTab.addEventListener('click', () => setActiveTab('health-tips'));
+    historyBtn.addEventListener('click', () => setActiveTab('history'));
+}
 
-        const precautionsList = document.getElementById('precautionsList');
-        precautionsList.innerHTML = '';
-        
-        if (data.precautions && data.precautions.length > 0) {
-            data.precautions.forEach(precaution => {
-                const li = document.createElement('li');
-                li.textContent = precaution;
-                precautionsList.appendChild(li);
-            });
-        } else {
-            precautionsList.innerHTML = '<li>No specific precautions available</li>';
+// ========== VOICE FUNCTIONS ==========
+
+function toggleVoiceInput() {
+    if (!recognition) return;
+
+    if (isListening) {
+        // user requested to stop listening
+        desiredListening = false;
+        recognition.stop();
+    } else {
+        // start continuous listening until user stops
+        desiredListening = true;
+        recognition.start();
+    }
+}
+
+function toggleVoiceAssistant() {
+    voiceEnabled = !voiceEnabled;
+    localStorage.setItem('voiceEnabled', voiceEnabled);
+    updateVoiceToggleUI();
+}
+
+function updateVoiceToggleUI() {
+    const btn = document.getElementById('voiceAssistantToggle');
+    btn.classList.toggle('active', voiceEnabled);
+    btn.textContent = voiceEnabled ? '🔊' : '🔇';
+}
+
+function showVoiceFeedback() {
+    document.getElementById('voiceFeedback').style.display = 'flex';
+}
+
+function hideVoiceFeedback() {
+    document.getElementById('voiceFeedback').style.display = 'none';
+}
+
+function speakBot(text) {
+    if (!voiceEnabled || !synth) return;
+
+    synth.cancel();
+    const utterance = new SpeechSynthesisUtterance(text);
+    utterance.rate = 0.9;
+    utterance.pitch = 1;
+    utterance.volume = 1;
+    synth.speak(utterance);
+}
+
+// ========== MESSAGE HANDLING ==========
+
+function sendMessage() {
+    const input = document.getElementById('symptomInput');
+    const text = input.value.trim();
+
+    if (!text) return;
+
+    // Add user message to chat
+    addMessage('user', text);
+    input.value = '';
+
+    // Determine if question or symptom check
+    const isQuestion = text.includes('?') || 
+                       text.toLowerCase().includes('how') ||
+                       text.toLowerCase().includes('what') ||
+                       text.toLowerCase().includes('when') ||
+                       text.toLowerCase().includes('why') ||
+                       text.toLowerCase().includes('tell');
+
+    if (isQuestion) {
+        handleHealthQA(text);
+    } else {
+        handleDiagnosis(text);
+    }
+}
+
+function handleHealthQA(question) {
+    const resultsPanel = document.getElementById('resultsPanel');
+
+    fetch('/api/health_qa', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ question: question })
+    })
+    .then(response => response.json())
+    .then(data => {
+        addMessage('bot', data.answer);
+        speakBot(data.answer);
+
+        // Display in sidebar
+        const resultHTML = `
+            <div class="diagnosis-result">
+                <div class="result-title">💡 Health Information</div>
+                <div class="result-item">
+                    <div class="result-value">${highlightMedicalTerms(data.answer)}</div>
+                </div>
+                <div class="action-buttons">
+                    <button class="action-btn" onclick="copyResult('${data.answer.replace(/'/g, "\\'")}')">📋 Copy</button>
+                    <button class="action-btn" onclick="speakBot('${data.answer.replace(/'/g, "\\'")}')">🔊 Read</button>
+                </div>
+            </div>
+        `;
+        resultsPanel.innerHTML = resultHTML;
+    })
+    .catch(error => {
+        console.error('Error:', error);
+        const errorMsg = 'Sorry, I could not answer that question. Please try rephrasing.';
+        addMessage('bot', errorMsg);
+        speakBot(errorMsg);
+    });
+}
+
+function handleDiagnosis(input) {
+    const resultsPanel = document.getElementById('resultsPanel');
+
+    fetch('/api/diagnose', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ symptoms: input })
+    })
+    .then(response => response.json())
+    .then(data => {
+        if (data.error) {
+            addMessage('bot', data.error);
+            speakBot(data.error);
+            return;
         }
 
-        inputSection.style.display = 'none';
-        resultsContainer.style.display = 'block';
-    }
+        currentDiagnosis = input;
 
-    let currentFollowupDisease = null;
-    function showFollowupQuestions(questions, disease) {
-        currentFollowupDisease = disease || null;
-        followupContainer.style.display = 'block';
-        followupQuestions.innerHTML = '';
-        questions.forEach(q => {
-            const div = document.createElement('div');
-            div.className = 'form-group';
-            const label = document.createElement('label');
-            label.textContent = q;
-            const input = document.createElement('input');
-            input.type = 'text';
-            input.dataset.question = q;
-            input.className = 'followup-input';
-            div.appendChild(label);
-            div.appendChild(input);
-            followupQuestions.appendChild(div);
+        if (data.disease && data.disease !== 'Unknown') {
+            const symptomsText = (data.symptoms_present || []).map(s => s.replace(/_/g, ' ')).join(', ') || input;
+            addMessage('bot', data.result_message);
+            speakBot(data.result_message);
+
+            // Build precautions list
+            const precautions = data.precautions || [];
+            const precautionsHTML = precautions.length > 0 
+                ? precautions.map(p => `<li>${p}</li>`).join('')
+                : '<li>Consult a healthcare professional</li>';
+
+            // Build other diseases list
+            const otherDiseasesHTML = data.all_possible_diseases && data.all_possible_diseases.length > 1
+                ? `<div class="result-item">
+                   <div class="result-label">Other Possible Diseases</div>
+                   <div class="result-value">${data.all_possible_diseases.filter(d => d !== data.disease).join(', ')}</div>
+                   </div>`
+                : '';
+
+            const resultHTML = `
+                <div class="diagnosis-result">
+                    <div class="result-title">🏥 Comprehensive Diagnosis</div>
+                    
+                    <div class="result-item">
+                        <div class="result-label">Detected Symptoms</div>
+                        <div class="result-value">${symptomsText}</div>
+                    </div>
+
+                    <div class="result-item">
+                        <div class="result-label">Primary Disease</div>
+                        <div class="result-value" style="color: #42A5F5; font-weight: bold; font-size: 15px;">${data.disease}</div>
+                    </div>
+
+                    <div class="result-item">
+                        <div class="result-label">Description</div>
+                        <div class="result-value">${data.description || 'No description available'}</div>
+                    </div>
+
+                    ${otherDiseasesHTML}
+
+                    <div class="result-item">
+                        <div class="result-label">Confidence Level</div>
+                        <div class="confidence-bar">
+                            <div class="confidence-fill" style="width: ${Math.min(data.confidence * 100, 100)}%"></div>
+                        </div>
+                        <div class="result-value">${Math.round(Math.min(data.confidence * 100, 100))}%</div>
+                    </div>
+
+                    <div class="result-item">
+                        <div class="result-label">Precautions</div>
+                        <ul class="precaution-list">
+                            ${precautionsHTML}
+                        </ul>
+                    </div>
+
+                    <div class="action-buttons">
+                        <button class="action-btn" onclick="copyResult('${data.disease}')">📋 Copy</button>
+                        <button class="action-btn" onclick="speakBot('${data.result_message.replace(/'/g, "\\'")}')">🔊 Read</button>
+                    </div>
+                </div>
+            `;
+            resultsPanel.innerHTML = resultHTML;
+        } else {
+            const msg = 'Please describe your symptoms more clearly. Example: "I have fever, cough and headache"';
+            addMessage('bot', msg);
+            speakBot(msg);
+        }
+    })
+    .catch(error => {
+        console.error('Error:', error);
+        const errorMsg = 'An error occurred during diagnosis. Please try again.';
+        addMessage('bot', errorMsg);
+        speakBot(errorMsg);
+    });
+}
+
+function askFollowup() {
+    if (!currentDiagnosis) return;
+    const resultsPanel = document.getElementById('resultsPanel');
+    
+    const followupHTML = `
+        <div class="diagnosis-result">
+            <div class="result-title">❓ Follow-up Questions</div>
+            <div class="result-item">
+                <button class="action-btn" onclick="setInput('More severe symptoms')">More Severe?</button>
+                <button class="action-btn" onclick="setInput('Duration of disease')">How Long?</button>
+            </div>
+        </div>
+    `;
+    resultsPanel.innerHTML = followupHTML;
+}
+
+// ========== CHAT DISPLAY ==========
+
+function addMessage(sender, text) {
+    const chatBox = document.getElementById('chatBox');
+
+    // Clear welcome message on first message
+    const welcome = chatBox.querySelector('.welcome-message');
+    if (welcome) welcome.remove();
+
+    const messageDiv = document.createElement('div');
+    messageDiv.className = `message ${sender}`;
+
+    const contentDiv = document.createElement('div');
+    contentDiv.className = 'message-content';
+    contentDiv.innerHTML = highlightMedicalTerms(text);
+
+    messageDiv.appendChild(contentDiv);
+    chatBox.appendChild(messageDiv);
+
+    // Auto scroll to bottom
+    chatBox.parentElement.scrollTop = chatBox.parentElement.scrollHeight;
+
+    // Save to history
+    chatHistory.push({ sender, text, timestamp: new Date().toLocaleTimeString() });
+    saveChatHistory();
+}
+
+function highlightMedicalTerms(text) {
+    let highlighted = text;
+    MEDICAL_TERMS.forEach(term => {
+        const regex = new RegExp(`\\b${term}\\b`, 'gi');
+        highlighted = highlighted.replace(regex, `<span class="highlight-term">${term}</span>`);
+    });
+    return highlighted;
+}
+
+function setInput(text) {
+    document.getElementById('symptomInput').value = text;
+    document.getElementById('symptomInput').focus();
+}
+
+function copyResult(text) {
+    navigator.clipboard.writeText(text).then(() => {
+        alert('Copied to clipboard!');
+    });
+}
+
+// ========== CHAT HISTORY ==========
+
+function saveChatHistory() {
+    localStorage.setItem('chatHistory', JSON.stringify(chatHistory.slice(-10)));
+}
+
+function loadChatHistory() {
+    const saved = localStorage.getItem('chatHistory');
+    if (saved) {
+        chatHistory = JSON.parse(saved);
+        const chatBox = document.getElementById('chatBox');
+        chatHistory.forEach(msg => {
+            const messageDiv = document.createElement('div');
+            messageDiv.className = `message ${msg.sender}`;
+            const contentDiv = document.createElement('div');
+            contentDiv.className = 'message-content';
+            contentDiv.innerHTML = highlightMedicalTerms(msg.text);
+            messageDiv.appendChild(contentDiv);
+            chatBox.appendChild(messageDiv);
         });
     }
+}
 
-        followupSubmit.addEventListener('click', async function() {
-        const inputs = document.querySelectorAll('.followup-input');
-        const answers = {};
-        inputs.forEach(i => { answers[i.dataset.question] = i.value.trim(); });
+function clearHistory() {
+    if (confirm('Clear all chat history?')) {
+        chatHistory = [];
+        localStorage.removeItem('chatHistory');
+        document.getElementById('chatBox').innerHTML = `
+            <div class="welcome-message">
+                <div class="welcome-icon">🏥</div>
+                <h2>Welcome to MediChat</h2>
+                <p>Ask me about symptoms, diseases, health tips, and more!</p>
+                <div class="quick-options">
+                    <button class="quick-btn" onclick="setInput('I have fever')">Fever</button>
+                    <button class="quick-btn" onclick="setInput('How to manage stress')">Stress</button>
+                    <button class="quick-btn" onclick="setInput('Sleep tips')">Sleep</button>
+                    <button class="quick-btn" onclick="setInput('Diet advice')">Diet</button>
+                </div>
+            </div>
+        `;
+    }
+}
 
-        // Send follow-up answers to backend
-        followupSubmit.disabled = true;
-        followupSubmit.textContent = 'Submitting...';
-        try {
-            const response = await fetch('/api/diagnose_followup', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ answers, disease: currentFollowupDisease, age: parseInt(ageInput.value) || null })
-            });
-            const data = await response.json();
-            displayResults(data, symptomInput.value || knownDiseaseInput.value, parseInt(daysInput.value));
-            addMessage('bot', data.result_message || `Final result: ${data.disease}`);
-            followupContainer.style.display = 'none';
-        } catch (err) {
-            showError('Error submitting follow-up answers');
-        } finally {
-            followupSubmit.disabled = false;
-            followupSubmit.textContent = 'Submit Answers';
+// ========== TAB MANAGEMENT ==========
+
+function setActiveTab(tab) {
+    const tabs = document.querySelectorAll('.tab-btn');
+    tabs.forEach(t => t.classList.remove('active'));
+    
+    // Find and mark the correct button as active
+    if (tab === 'diagnosis') {
+        document.getElementById('diagnosisTab').classList.add('active');
+        if (currentDiagnosis) {
+            handleDiagnosis(currentDiagnosis);
         }
-    });
-
-    // Reset form
-    resetBtn.addEventListener('click', function() {
-        symptomInput.value = '';
-        daysInput.value = '1';
-        inputSection.style.display = 'block';
-        resultsContainer.style.display = 'none';
-        symptomInput.focus();
-    });
-
-    // Show error message
-    function showError(message) {
-        const errorDiv = document.createElement('div');
-        errorDiv.className = 'error-message';
-        errorDiv.textContent = message;
-        inputSection.insertBefore(errorDiv, inputSection.firstChild);
-        
-        setTimeout(() => {
-            errorDiv.remove();
-        }, 5000);
+    } else if (tab === 'health-tips') {
+        document.getElementById('healthTipsTab').classList.add('active');
+        showHealthTips();
+    } else if (tab === 'history') {
+        document.getElementById('historyBtn').classList.add('active');
+        showChatHistory();
     }
+}
 
-    // Add message to chat box
-    function addMessage(sender, text) {
-        const messageDiv = document.createElement('div');
-        messageDiv.className = `message ${sender}-message`;
-        const p = document.createElement('p');
-        p.textContent = text;
-        messageDiv.appendChild(p);
-        chatBox.appendChild(messageDiv);
-        chatBox.scrollTop = chatBox.scrollHeight;
+function showChatHistory() {
+    const historyHTML = `
+        <div class="diagnosis-result">
+            <div class="result-title">📜 Chat History</div>
+            ${chatHistory.length > 0 
+                ? chatHistory.slice(-10).reverse().map((msg, idx) => `
+                    <div class="result-item">
+                        <div class="result-label">${msg.sender.toUpperCase()} - ${msg.timestamp}</div>
+                        <div class="result-value">${msg.text.substring(0, 150)}</div>
+                    </div>
+                `).join('')
+                : '<div class="result-item"><div class="result-value">No chat history yet</div></div>'
+            }
+            ${chatHistory.length > 0 ? `<div class="action-buttons">
+                <button class="action-btn" onclick="clearHistory()">🗑️ Clear All</button>
+            </div>` : ''}
+        </div>
+    `;
+    document.getElementById('resultsPanel').innerHTML = historyHTML;
+}
+
+function showHealthTips() {
+    const tipsHTML = `
+        <div class="diagnosis-result">
+            <div class="result-title">💡 Health Tips</div>
+            
+            <div class="result-item">
+                <div class="result-label">🏃 Exercise</div>
+                <div class="result-value">Get at least 30 minutes of moderate exercise daily</div>
+            </div>
+
+            <div class="result-item">
+                <div class="result-label">🛏️ Sleep</div>
+                <div class="result-value">Aim for 7-9 hours of quality sleep each night</div>
+            </div>
+
+            <div class="result-item">
+                <div class="result-label">🥗 Nutrition</div>
+                <div class="result-value">Eat a balanced diet with fruits, vegetables, and whole grains</div>
+            </div>
+
+            <div class="result-item">
+                <div class="result-label">💧 Hydration</div>
+                <div class="result-value">Drink at least 8 glasses of water daily</div>
+            </div>
+
+            <div class="result-item">
+                <div class="result-label">🧘 Stress Management</div>
+                <div class="result-value">Practice meditation, yoga, or deep breathing exercises</div>
+            </div>
+
+            <div class="result-item">
+                <div class="result-label">🏥 Regular Check-ups</div>
+                <div class="result-value">Visit your doctor for regular health screenings</div>
+            </div>
+        </div>
+    `;
+    document.getElementById('resultsPanel').innerHTML = tipsHTML;
+}
+
+// ========== EXPORT FOR GLOBAL SCOPE ==========
+
+window.setInput = setInput;
+window.copyResult = copyResult;
+window.clearHistory = clearHistory;
+window.askFollowup = askFollowup;
+window.speakBot = speakBot;
+
+// ========== THEME TOGGLE ==========
+
+let isDarkTheme = localStorage.getItem('theme') === 'dark' || true;
+
+function toggleTheme() {
+    isDarkTheme = !isDarkTheme;
+    localStorage.setItem('theme', isDarkTheme ? 'dark' : 'light');
+    updateTheme();
+}
+
+function updateTheme() {
+    const themeBtn = document.getElementById('themeToggle');
+    const root = document.documentElement;
+    
+    if (isDarkTheme) {
+        themeBtn.textContent = '🌙';
+        root.style.setProperty('--bg-dark', '#0D2A45');
+        root.style.setProperty('--bg-darker', '#081820');
+        root.style.setProperty('--text-primary', '#ffffff');
+    } else {
+        themeBtn.textContent = '☀️';
+        root.style.setProperty('--bg-dark', '#F5F5F5');
+        root.style.setProperty('--bg-darker', '#FFFFFF');
+        root.style.setProperty('--text-primary', '#1a1a1a');
     }
+}
 
-    // Focus on symptom input
-    symptomInput.focus();
+// Initialize theme on page load
+window.addEventListener('load', function() {
+    updateTheme();
+    const themeBtn = document.getElementById('themeToggle');
+    if (themeBtn) {
+        themeBtn.addEventListener('click', toggleTheme);
+    }
 });

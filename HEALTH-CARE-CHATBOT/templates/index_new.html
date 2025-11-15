@@ -1,0 +1,96 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>MediChat - AI Health Assistant</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body>
+    <div class="modern-container">
+        <!-- Main Chat Interface -->
+        <div class="chat-main">
+            <!-- Header with branding -->
+            <div class="modern-header">
+                <div class="header-left">
+                    <h1>🏥 MediChat</h1>
+                    <p>Your AI Health Assistant</p>
+                </div>
+                <div class="header-right">
+                    <button id="voiceAssistantToggle" class="voice-toggle-modern" title="Toggle voice">
+                        🔊
+                    </button>
+                    <button id="themeToggle" class="theme-toggle" title="Toggle theme">
+                        🌙
+                    </button>
+                </div>
+            </div>
+
+            <!-- Chat Messages Area -->
+            <div class="chat-messages-area">
+                <div id="chatBox" class="messages-container">
+                    <div class="welcome-message">
+                        <div class="welcome-icon">🏥</div>
+                        <h2>Welcome to MediChat</h2>
+                        <p>Ask me about symptoms, diseases, health tips, and more!</p>
+                        <div class="quick-options">
+                            <button class="quick-btn" onclick="setInput('I have fever')">Fever</button>
+                            <button class="quick-btn" onclick="setInput('How to manage stress')">Stress</button>
+                            <button class="quick-btn" onclick="setInput('Sleep tips')">Sleep</button>
+                            <button class="quick-btn" onclick="setInput('Diet advice')">Diet</button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Voice Feedback -->
+            <div id="voiceFeedback" class="voice-feedback-modern" style="display: none;">
+                <div class="listening-wave">
+                    <span></span><span></span><span></span><span></span><span></span>
+                </div>
+                <div id="recognizedText" class="recognized-text">🎤 Listening...</div>
+            </div>
+
+            <!-- Input Area -->
+            <div class="input-area-modern">
+                <div class="input-wrapper-modern">
+                    <input 
+                        type="text" 
+                        id="symptomInput" 
+                        class="modern-input"
+                        placeholder="Ask about symptoms, diseases, health tips... or click 🎤 to speak"
+                        autocomplete="off"
+                    >
+                    <button id="voiceInputBtn" class="voice-btn-modern" title="Click to speak">
+                        🎤
+                    </button>
+                    <button id="sendBtn" class="send-btn-modern" title="Send message">
+                        ➤
+                    </button>
+                </div>
+                <div class="input-hint">💡 You can ask about symptoms, diseases, or general health advice</div>
+            </div>
+
+            <!-- Options Bar -->
+            <div class="options-bar">
+                <button id="diagnosisTab" class="tab-btn active">Diagnosis</button>
+                <button id="healthTipsTab" class="tab-btn">Health Tips</button>
+                <button id="historyBtn" class="tab-btn">History</button>
+                <button id="clearHistoryBtn" class="tab-btn clear">Clear</button>
+            </div>
+        </div>
+
+        <!-- Sidebar - Results Panel -->
+        <aside class="results-sidebar">
+            <div class="results-panel" id="resultsPanel">
+                <div class="empty-state">
+                    <div class="empty-icon">📋</div>
+                    <p>Results will appear here</p>
+                </div>
+            </div>
+        </aside>
+    </div>
+
+    <script src="{{ url_for('static', filename='script.js') }}"></script>
+</body>
+</html>
