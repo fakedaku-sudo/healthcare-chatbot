@@ -9,6 +9,7 @@ let isListening = false;
 let voiceEnabled = localStorage.getItem('voiceEnabled') === 'true';
 let chatHistory = [];
 let currentDiagnosis = null;
+let currentDiagnosisData = null;
 let desiredListening = false; // when true, keep restarting recognition for continuous listening
 
 const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
@@ -322,13 +323,37 @@ function handleDiagnosis(input) {
                         </ul>
                     </div>
 
+                            <div class="result-item">
+                                <div class="result-label">Common Treatment (comma separated)</div>
+                                <div class="result-value">
+                                    <textarea id="treatmentInput" placeholder="e.g. Rest, Hydration, Paracetamol 500mg" style="width:100%;min-height:50px"></textarea>
+                                    <div style="margin-top:8px;">
+                                        <button class="action-btn" onclick="saveTreatments()">🩺 Save Treatment</button>
+                                    </div>
+                                </div>
+                            </div>
+
                     <div class="action-buttons">
                         <button class="action-btn" onclick="copyResult('${data.disease}')">📋 Copy</button>
                         <button class="action-btn" onclick="speakBot('${data.result_message.replace(/'/g, "\\'")}')">🔊 Read</button>
+                        <button class="action-btn" onclick="downloadReport()">⬇️ Download Report (PDF)</button>
                     </div>
                 </div>
             `;
             resultsPanel.innerHTML = resultHTML;
+            // store the latest diagnosis data for download
+            currentDiagnosisData = data;
+            // Prefill treatments textarea if any
+            const trInput = document.getElementById('treatmentInput');
+            if (trInput) {
+                const tr = (data.treatments || data.treatments === 0) ? data.treatments : (data.treatments || []);
+                if (tr && tr.length) trInput.value = tr.join(', ');
+                else {
+                    // try to prefill from precautions/description if available
+                    const derived = data.derived_treatments || [];
+                    if (derived.length) trInput.value = derived.join(', ');
+                }
+            }
         } else {
             const msg = 'Please describe your symptoms more clearly. Example: "I have fever, cough and headache"';
             addMessage('bot', msg);
@@ -341,6 +366,75 @@ function handleDiagnosis(input) {
         addMessage('bot', errorMsg);
         speakBot(errorMsg);
     });
+}
+
+function downloadReport() {
+    if (!currentDiagnosisData) {
+        alert('No diagnosis available to download');
+        return;
+    }
+
+    fetch('/api/download_report', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ diagnosis: currentDiagnosisData, input_text: currentDiagnosis })
+    })
+        .then(response => {
+            if (!response.ok) {
+                // try to parse a JSON error message from the server
+                return response.json().then(j => { throw new Error(j.error || 'Download failed'); }).catch(() => { throw new Error('Download failed'); });
+            }
+            // Keep headers for filename, then return blob
+            return Promise.all([response.blob(), response.headers]);
+    })
+    .then(([blob, headers]) => {
+        // Determine filename from Content-Disposition header if present
+        let filename = 'MediChat_health_report.pdf';
+        try {
+            const cd = headers.get('Content-Disposition') || headers.get('content-disposition');
+            if (cd) {
+                const match = /filename\*?=(?:UTF-8'')?"?([^";]+)"?/.exec(cd);
+                if (match && match[1]) filename = match[1];
+            } else {
+                // Fallback: use blob type
+                if (blob.type === 'text/plain') filename = 'MediChat_health_report.txt';
+                else if (blob.type === 'application/pdf') filename = 'MediChat_health_report.pdf';
+            }
+        } catch (e) {
+            console.warn('Could not parse filename from headers', e);
+        }
+
+        const url = window.URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = filename;
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+        window.URL.revokeObjectURL(url);
+    })
+    .catch(err => {
+        console.error('Download failed:', err);
+        alert('Could not download the report. Please try again.');
+    });
+}
+
+function saveTreatments() {
+    const trInput = document.getElementById('treatmentInput');
+    if (!trInput) return;
+    const raw = trInput.value.trim();
+    if (!raw) {
+        if (confirm('No treatments entered. Clear any existing treatments?')) {
+            if (currentDiagnosisData) currentDiagnosisData.treatments = [];
+            alert('Treatments cleared');
+        }
+        return;
+    }
+    // Split by comma or newline
+    const parts = raw.split(/,|\n/).map(s => s.trim()).filter(Boolean);
+    if (!currentDiagnosisData) currentDiagnosisData = {};
+    currentDiagnosisData.treatments = parts;
+    alert('Treatments saved');
 }
 
 function askFollowup() {
@@ -537,6 +631,7 @@ window.copyResult = copyResult;
 window.clearHistory = clearHistory;
 window.askFollowup = askFollowup;
 window.speakBot = speakBot;
+window.saveTreatments = saveTreatments;
 
 // ========== THEME TOGGLE ==========
 

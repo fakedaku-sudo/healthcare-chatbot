@@ -1,4 +1,30 @@
-from flask import Flask, render_template, request, jsonify
+from flask import Flask, render_template, request, jsonify, send_file
+import io
+import datetime
+import logging
+import traceback
+logging.basicConfig(level=logging.INFO, format='[%(levelname)s] %(message)s')
+import os
+
+# Base directory for data files (make file paths robust regardless of cwd)
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+
+# PDF generation (optional)
+try:
+    import importlib
+    _rl_pages = importlib.import_module('reportlab.lib.pagesizes')
+    _rl_pdfgen = importlib.import_module('reportlab.pdfgen.canvas')
+    _rl_units = importlib.import_module('reportlab.lib.units')
+    letter = getattr(_rl_pages, 'letter')
+    canvas = _rl_pdfgen
+    inch = getattr(_rl_units, 'inch')
+    HAVE_REPORTLAB = True
+except Exception:
+    HAVE_REPORTLAB = False
+    logging.warning('reportlab not installed; PDF reports will not be available. Install with `pip install reportlab`')
+
+# Chatbot display name used in reports
+CHATBOT_NAME = 'MediChat'
 import re
 import pandas as pd
 import pyttsx3
@@ -9,17 +35,10 @@ from sklearn.model_selection import train_test_split
 from sklearn.model_selection import cross_val_score
 from sklearn.svm import SVC
 import csv
-import warnings
-import traceback
-
-warnings.filterwarnings("ignore", category=DeprecationWarning)
-
-app = Flask(__name__)
-
 # ==================== DATA LOADING ====================
-print("[Loading Data...]")
-training = pd.read_csv('Training.csv')
-testing = pd.read_csv('Testing.csv')
+logging.info('Loading data...')
+training = pd.read_csv(os.path.join(BASE_DIR, 'Training.csv'))
+testing = pd.read_csv(os.path.join(BASE_DIR, 'Testing.csv'))
 cols = training.columns
 cols = cols[:-1]
 x = training[cols]
@@ -43,12 +62,11 @@ clf = clf1.fit(x_train, y_train)
 
 # Print model scores
 scores = cross_val_score(clf, x_test, y_test, cv=3)
-print(scores.mean())
+logging.info('DecisionTree cross-val mean score: %.4f', scores.mean())
 
 model = SVC()
 model.fit(x_train, y_train)
-print("for svm: ")
-print(model.score(x_test, y_test))
+logging.info('SVM test score: %.4f', model.score(x_test, y_test))
 
 importances = clf.feature_importances_
 indices = np.argsort(importances)[::-1]
@@ -63,8 +81,18 @@ symptoms_dict = {}
 
 for index, symptom in enumerate(x):
     symptoms_dict[symptom] = index
+description_list = dict()
+precautionDictionary = dict()
+
+symptoms_dict = {}
+
+for index, symptom in enumerate(x):
+    symptoms_dict[symptom] = index
 
 # ==================== HELPER FUNCTIONS ====================
+
+# Create Flask app
+app = Flask(__name__, static_folder='static', template_folder='templates')
 
 def readn(nstr):
     """Text to speech function"""
@@ -78,7 +106,7 @@ def readn(nstr):
 def getDescription():
     """Load disease descriptions from CSV"""
     global description_list
-    with open('symptom_Description.csv') as csv_file:
+    with open(os.path.join(BASE_DIR, 'symptom_Description.csv')) as csv_file:
         csv_reader = csv.reader(csv_file, delimiter=',')
         line_count = 0
         for row in csv_reader:
@@ -88,7 +116,7 @@ def getDescription():
 def getSeverityDict():
     """Load symptom severity data from CSV"""
     global severityDictionary
-    with open('Symptom_severity.csv') as csv_file:
+    with open(os.path.join(BASE_DIR, 'Symptom_severity.csv')) as csv_file:
         csv_reader = csv.reader(csv_file, delimiter=',')
         line_count = 0
         try:
@@ -101,7 +129,7 @@ def getSeverityDict():
 def getprecautionDict():
     """Load precaution data from CSV"""
     global precautionDictionary
-    with open('symptom_precaution.csv') as csv_file:
+    with open(os.path.join(BASE_DIR, 'symptom_precaution.csv')) as csv_file:
         csv_reader = csv.reader(csv_file, delimiter=',')
         line_count = 0
         for row in csv_file:
@@ -231,7 +259,7 @@ def check_pattern(dis_list, inp):
 
 def sec_predict(symptoms_exp):
     """Secondary prediction using Decision Tree"""
-    df = pd.read_csv('Training.csv')
+    df = pd.read_csv(os.path.join(BASE_DIR, 'Training.csv'))
     X = df.iloc[:, :-1]
     y = df['prognosis']
     X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.3, random_state=20)
@@ -266,6 +294,80 @@ def get_precautions_for_disease(disease_name):
     
     # If no match found, return empty list
     return []
+
+
+def derive_common_treatments(disease_name):
+    """Attempt to derive common treatments from the precautionDictionary or description_list."""
+    if not disease_name:
+        return []
+
+    # Try precautionDictionary first
+    treatments = []
+    try:
+        precs = precautionDictionary.get(disease_name, [])
+        if not precs:
+            # Try case-insensitive match
+            for k, v in precautionDictionary.items():
+                if k.lower().strip() == disease_name.lower().strip():
+                    precs = v
+                    break
+        # Keywords that indicate a treatment or medicine
+        treatment_keywords = ['take', 'treatment', 'antibiotic', 'antiviral', 'insulin', 'inhaler', 'physiotherapy', 'antimalarial', 'antacids', 'antihistamine', 'analgesic', 'pain reliever', 'ppis', 'ppi']
+        for p in precs:
+            lp = p.lower()
+            if any(kw in lp for kw in treatment_keywords):
+                treatments.append(p)
+    except Exception:
+        pass
+
+    # If none found, try description_list and pick sentences that look like treatments
+    if not treatments:
+        desc = description_list.get(disease_name, '')
+        if not desc:
+            # case-insensitive fallback
+            for k, v in description_list.items():
+                if k.lower().strip() == disease_name.lower().strip():
+                    desc = v
+                    break
+        if desc:
+            # split by comma and pick items containing treatment-like keywords
+            parts = [p.strip() for p in re.split(r'[,;]\s*', desc) if p.strip()]
+            for p in parts:
+                lp = p.lower()
+                if any(kw in lp for kw in ['take', 'treatment', 'use', 'apply', 'rest', 'therapy', 'inhaler', 'antibiotic', 'antimalarial', 'antacid']):
+                    treatments.append(p)
+
+    # Deduplicate and return
+    seen = set()
+    out = []
+    for t in treatments:
+        if t not in seen:
+            out.append(t)
+            seen.add(t)
+    # Normalize into informative sentences
+    informative = []
+    for t in out:
+        s = t.strip()
+        # capitalize first letter
+        if s and not s[0].isupper():
+            s = s[0].upper() + s[1:]
+        if not s.endswith('.'):
+            s = s + '.'
+        informative.append(s)
+
+    # If nothing found, provide general guidance
+    if not informative:
+        informative = [
+            'Rest and stay well hydrated.',
+            'Symptomatic treatment as needed (e.g. paracetamol for fever or pain) under medical advice.',
+            'Seek medical consultation for specific prescription medicines and further evaluation.'
+        ]
+
+    # Add a short general safety note
+    if 'Seek medical' not in ' '.join(informative):
+        informative.append('Seek medical attention if symptoms worsen, such as difficulty breathing, severe pain, or high fever.')
+
+    return informative
 
 # ==================== INITIALIZE DATA ====================
 getSeverityDict()
@@ -320,10 +422,12 @@ def diagnose():
                     result_disease = matches[0]
                     precautions = get_precautions_for_disease(result_disease)
                     description = description_list.get(result_disease, "No description available")
+                    derived = derive_common_treatments(result_disease)
                     return jsonify({
                         'disease': result_disease,
                         'description': description,
                         'precautions': precautions,
+                        'derived_treatments': derived,
                         'result_message': f"You asked about {result_disease}",
                         'symptoms_present': [],
                         'confidence': 1.0
@@ -416,6 +520,7 @@ def diagnose():
 
         description = description_list.get(top_disease, "No description available")
         precautions = get_precautions_for_disease(top_disease)
+        derived = derive_common_treatments(top_disease)
         
         # Create comprehensive message
         symptoms_str = ', '.join([s.replace('_', ' ').title() for s in extracted_symptoms])
@@ -431,6 +536,7 @@ def diagnose():
             'description': description,
             'condition': 'Multiple symptoms detected',
             'precautions': precautions,
+            'derived_treatments': derived,
             'result_message': result_msg,
             'symptoms_present': list(extracted_symptoms),
             'all_possible_diseases': list(disease_scores.keys()),
@@ -440,8 +546,8 @@ def diagnose():
     except ValueError as e:
         return jsonify({'error': 'Invalid input format'}), 400
     except Exception as e:
-        # Print full traceback for debugging
-        print("[ERROR] Diagnosis exception:\n" + traceback.format_exc())
+        # Log full traceback for debugging
+        logging.error('Diagnosis exception:\n%s', traceback.format_exc())
         return jsonify({'error': f'An error occurred during diagnosis. Please try again.'}), 500
 
 
@@ -482,7 +588,7 @@ def diagnose_followup():
             'result_message': result_message
         })
     except Exception as e:
-        print(f"[ERROR] Followup error: {e}")
+        logging.error('Followup error: %s', e)
         return jsonify({'error': 'Follow-up processing failed'}), 500
 
 @app.route('/api/get_symptoms', methods=['GET'])
@@ -567,7 +673,285 @@ def not_found(e):
 def internal_error(e):
     return jsonify({'error': 'Internal server error'}), 500
 
+
+@app.route('/api/download_report', methods=['POST'])
+def download_report():
+    """Return a downloadable health report as a PDF built from diagnosis JSON."""
+    try:
+        data = request.json or {}
+        diagnosis = data.get('diagnosis', {})
+        input_text = data.get('input_text', '')
+        treatments = diagnosis.get('treatments', []) or []
+
+        now_dt = datetime.datetime.now()
+        now = now_dt.strftime('%Y-%m-%d %H:%M:%S')
+        timestamp = now_dt.strftime('%Y%m%d_%H%M%S')
+
+        # Patient info (optional)
+        patient_name = (data.get('patient_name') or '').strip()
+        patient_age = data.get('age', '')
+
+        # Logo path (optional) - check static/logo.png
+        logo_path = os.path.join(BASE_DIR, 'static', 'logo.png')
+        logo_exists = os.path.exists(logo_path)
+
+        # If reportlab is available, create PDF in memory, otherwise fallback to plain text
+        if HAVE_REPORTLAB:
+            # Try to use Platypus for nicer PDF formatting; fall back to canvas if platypus not available
+            try:
+                platypus = importlib.import_module('reportlab.platypus')
+                styles_mod = importlib.import_module('reportlab.lib.styles')
+                table_mod = importlib.import_module('reportlab.platypus.tables')
+                enums = importlib.import_module('reportlab.lib.enums')
+
+                SimpleDocTemplate = getattr(platypus, 'SimpleDocTemplate')
+                Paragraph = getattr(platypus, 'Paragraph')
+                Spacer = getattr(platypus, 'Spacer')
+                Table = getattr(table_mod, 'Table')
+                TableStyle = getattr(table_mod, 'TableStyle')
+
+                getSampleStyleSheet = getattr(styles_mod, 'getSampleStyleSheet')
+                ParagraphStyle = getattr(styles_mod, 'ParagraphStyle')
+
+                styles = getSampleStyleSheet()
+                title_style = ParagraphStyle(
+                    'TitleStyle', parent=styles['Title'], fontSize=18, leading=22, spaceAfter=12
+                )
+                heading_style = ParagraphStyle('Heading', parent=styles['Heading2'], fontSize=12, leading=14, spaceAfter=6)
+                normal_style = ParagraphStyle('Normal', parent=styles['Normal'], fontSize=10, leading=13)
+
+                buffer = io.BytesIO()
+                doc = SimpleDocTemplate(buffer, pagesize=letter, rightMargin=inch, leftMargin=inch, topMargin=inch, bottomMargin=inch)
+                elements = []
+
+                # Title and metadata (include patient info when available)
+                # If a logo exists, try to include it above the title
+                if logo_exists:
+                    try:
+                        Image = getattr(platypus, 'Image')
+                        img = Image(logo_path, width=60, height=60)
+                        elements.append(img)
+                    except Exception:
+                        pass
+                elements.append(Paragraph(f"{CHATBOT_NAME} - Health Report", title_style))
+                metadata = [
+                    ['Date:', now],
+                    ['Patient:', patient_name or 'N/A'],
+                    ['Age:', str(patient_age) or 'N/A'],
+                    ['Primary Disease:', diagnosis.get('disease', 'N/A')],
+                    ['Confidence:', f"{round(diagnosis.get('confidence', 0) * 100, 2)}%" if isinstance(diagnosis.get('confidence', 0), (int, float)) else str(diagnosis.get('confidence', '0'))]
+                ]
+                table = Table(metadata, colWidths=[110, 350])
+                table.setStyle(TableStyle([
+                    ('VALIGN', (0, 0), (-1, -1), 'TOP'),
+                    ('FONTNAME', (0, 0), (-1, -1), 'Helvetica'),
+                    ('FONTSIZE', (0, 0), (-1, -1), 10),
+                    ('BOTTOMPADDING', (0, 0), (-1, -1), 6),
+                ]))
+                elements.append(table)
+                elements.append(Spacer(1, 8))
+
+                # Input text
+                if input_text:
+                    elements.append(Paragraph('<b>Input:</b>', heading_style))
+                    elements.append(Paragraph(input_text, normal_style))
+                    elements.append(Spacer(1, 6))
+
+                # Description
+                elements.append(Paragraph('<b>Description</b>', heading_style))
+                elements.append(Paragraph(diagnosis.get('description', 'No description available'), normal_style))
+                elements.append(Spacer(1, 8))
+
+                # Precautions
+                elements.append(Paragraph('<b>Precautions</b>', heading_style))
+                precautions = diagnosis.get('precautions', []) or []
+                if precautions:
+                    for p in precautions:
+                        elements.append(Paragraph(f'• {p}', normal_style))
+                else:
+                    elements.append(Paragraph('• Follow up with a healthcare professional', normal_style))
+                elements.append(Spacer(1, 8))
+
+                # Common Treatments
+                elements.append(Paragraph('<b>Common Treatments</b>', heading_style))
+                if not treatments:
+                    derived = derive_common_treatments(diagnosis.get('disease'))
+                    if derived:
+                        treatments = derived
+
+                if treatments:
+                    for t in treatments:
+                        elements.append(Paragraph(f'• {t}', normal_style))
+                else:
+                    elements.append(Paragraph('• None specified', normal_style))
+                elements.append(Spacer(1, 8))
+
+                # All possible diseases
+                elements.append(Paragraph('<b>All Possible Diseases</b>', heading_style))
+                elements.append(Paragraph(', '.join(diagnosis.get('all_possible_diseases', [])), normal_style))
+
+                # Build PDF
+                doc.build(elements)
+                buffer.seek(0)
+                safe_name = re.sub(r'[^0-9A-Za-z_-]', '', (patient_name or 'patient').replace(' ', '_'))
+                filename = f"{CHATBOT_NAME}_{safe_name}_{timestamp}.pdf"
+                return send_file(buffer, as_attachment=True, download_name=filename, mimetype='application/pdf')
+            except Exception:
+                # If Platypus isn't available or errors, fall back to canvas approach used previously
+                try:
+                    buffer = io.BytesIO()
+                    pdf = canvas.Canvas(buffer, pagesize=letter)
+                    width, height = letter
+
+                    margin = 0.7 * inch
+                    x = margin
+                    y = height - margin
+
+                    # Draw logo (if exists) at top-left
+                    if logo_exists:
+                        try:
+                            pdf.drawImage(logo_path, x, y - 60, width=60, height=60)
+                        except Exception:
+                            pass
+
+                    pdf.setFont('Helvetica-Bold', 16)
+                    pdf.drawString(x + (70 if logo_exists else 0), y, f"{CHATBOT_NAME} - Health Report")
+                    y -= 20
+                    pdf.setFont('Helvetica', 9)
+                    pdf.drawString(x + (70 if logo_exists else 0), y, f'Date: {now}')
+                    y -= 14
+                    # Patient details
+                    if patient_name:
+                        pdf.setFont('Helvetica', 10)
+                        pdf.drawString(x + (70 if logo_exists else 0), y, f'Patient: {patient_name}    Age: {patient_age}')
+                        y -= 14
+
+                    if input_text:
+                        pdf.setFont('Helvetica-Bold', 11)
+                        pdf.drawString(x, y, 'Input:')
+                        y -= 12
+                        pdf.setFont('Helvetica', 10)
+                        text = pdf.beginText(x, y)
+                        for line in split_text(input_text, 80):
+                            text.textLine(line)
+                            y -= 12
+                        pdf.drawText(text)
+                        y -= 6
+
+                    pdf.setFont('Helvetica-Bold', 11)
+                    pdf.drawString(x, y, 'Primary Disease:')
+                    pdf.setFont('Helvetica', 11)
+                    pdf.drawString(x + 110, y, diagnosis.get('disease', 'N/A'))
+                    y -= 16
+
+                    pdf.setFont('Helvetica-Bold', 11)
+                    pdf.drawString(x, y, 'Confidence:')
+                    conf = diagnosis.get('confidence', 0)
+                    try:
+                        conf_pct = f"{round(conf * 100, 2)}%"
+                    except Exception:
+                        conf_pct = str(conf)
+                    pdf.setFont('Helvetica', 11)
+                    pdf.drawString(x + 110, y, conf_pct)
+                    y -= 18
+
+                    pdf.setFont('Helvetica-Bold', 11)
+                    pdf.drawString(x, y, 'Symptoms Present:')
+                    pdf.setFont('Helvetica', 10)
+                    symptoms = diagnosis.get('symptoms_present', []) or []
+                    pdf.drawString(x + 130, y, ', '.join(symptoms) if symptoms else 'N/A')
+                    y -= 18
+
+                    pdf.setFont('Helvetica-Bold', 11)
+                    pdf.drawString(x, y, 'Description:')
+                    y -= 12
+                    pdf.setFont('Helvetica', 10)
+                    text = pdf.beginText(x, y)
+                    for line in split_text(diagnosis.get('description', 'No description available'), 90):
+                        text.textLine(line)
+                        y -= 12
+                    pdf.drawText(text)
+                    y -= 8
+
+                    pdf.setFont('Helvetica-Bold', 11)
+                    pdf.drawString(x, y, 'Precautions:')
+                    y -= 12
+                    pdf.setFont('Helvetica', 10)
+                    precautions = diagnosis.get('precautions', []) or []
+                    if precautions:
+                        for p in precautions:
+                            pdf.drawString(x + 8, y, f'- {p}')
+                            y -= 12
+                    else:
+                        pdf.drawString(x + 8, y, '- Follow up with a healthcare professional')
+                        y -= 12
+
+                    y -= 6
+                    pdf.setFont('Helvetica-Bold', 11)
+                    pdf.drawString(x, y, 'Common Treatments:')
+                    y -= 12
+                    pdf.setFont('Helvetica', 10)
+                    if not treatments:
+                        derived = derive_common_treatments(diagnosis.get('disease'))
+                        if derived:
+                            treatments = derived
+
+                    if treatments:
+                        for m in treatments:
+                            pdf.drawString(x + 8, y, f'- {m}')
+                            y -= 12
+                    else:
+                        pdf.drawString(x + 8, y, '- None specified')
+                        y -= 12
+
+                    y -= 6
+                    pdf.setFont('Helvetica-Bold', 11)
+                    pdf.drawString(x, y, 'All Possible Diseases:')
+                    y -= 12
+                    pdf.setFont('Helvetica', 10)
+                    pdf.drawString(x + 8, y, ', '.join(diagnosis.get('all_possible_diseases', [])))
+                    y -= 18
+
+                    pdf.showPage()
+                    pdf.save()
+                    buffer.seek(0)
+                    safe_name = re.sub(r'[^0-9A-Za-z_-]', '', (patient_name or 'patient').replace(' ', '_'))
+                    filename = f"{CHATBOT_NAME}_{safe_name}_{timestamp}.pdf"
+                    return send_file(buffer, as_attachment=True, download_name=filename, mimetype='application/pdf')
+                except Exception as e:
+                    logging.error('Fallback PDF generation failed: %s', e)
+                    return jsonify({'error': 'Failed to generate PDF report'}), 500
+        else:
+            # PDF generation is required for this endpoint. Inform the client to install reportlab.
+            msg = (
+                'PDF generation is not available on the server. To enable PDF reports, '
+                'install ReportLab in the server environment: `pip install reportlab`.'
+            )
+            logging.error(msg)
+            return jsonify({'error': msg}), 501
+    except Exception as e:
+        logging.error('Report generation failed: %s', e)
+        return jsonify({'error': 'Failed to generate report'}), 500
+
+
+def split_text(text, width):
+    """Helper to split long text into chunks for PDF lines."""
+    if not text:
+        return ['']
+    words = text.split()
+    lines = []
+    current = ''
+    for w in words:
+        if len(current) + len(w) + 1 <= width:
+            current = (current + ' ' + w).strip()
+        else:
+            lines.append(current)
+            current = w
+    if current:
+        lines.append(current)
+    return lines
+
 if __name__ == '__main__':
-    print("[INFO] HealthCare ChatBot Starting...")
-    print("[INFO] Open your browser and go to: http://localhost:5000")
+    logging.info('HealthCare ChatBot Starting...')
+    logging.info('Open your browser and go to: http://localhost:5000')
     app.run(debug=True, port=5000)
